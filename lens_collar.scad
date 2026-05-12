@@ -89,7 +89,7 @@ foot_h         = 12;    // [mm] total foot height below ring
 // Increase (e.g. 50–60 mm) for heavier lenses: a longer Arca-Swiss rail
 // distributes the load and gives the clamp more grip surface.
 // Must satisfy: foot_l > 2 * (as_lip_t + 2)
-foot_l         = lens_grip_w;   // [mm] — independent of lens_grip_w
+foot_l         = lens_grip_w;   // [mm] — change independently of lens_grip_w if needed
 // 1/4"-20 UNC: nominal 6.35 mm + clearance + fdm_hole_comp
 tripod_hole_d  = 6.6 + fdm_hole_comp;
 
@@ -195,7 +195,8 @@ focus_ring_od   = focus_rigid_id + 2 * focus_wall_t;
 // ============================================================
 
 gap            = 0.3;   // [mm] visual gap between halves in preview
-$fn            = 120;
+eps            = 0.01;  // [mm] epsilon overcut — prevents z-fighting in boolean ops
+$fn            = $preview ? 32 : 120;
 
 // ============================================================
 //  PARAMETER GUARDS
@@ -224,6 +225,23 @@ assert(gusset_d <= gusset_h,
 assert(focus_grip_w > bolt_d + 2,
     str("focus_grip_w (", focus_grip_w, " mm) too narrow — needs > bolt_d + 2 = ",
         bolt_d + 2, " mm for material either side of the clamp bolt in Z."));
+
+assert(focus_grip_w > 2 * cbore_depth,
+    str("focus_grip_w (", focus_grip_w, " mm) too narrow — counterbores (",
+        cbore_depth, " mm each side) would overlap at Z=0."));
+
+assert(focus_root_chamfer < focus_tab_w / 2,
+    str("focus_root_chamfer (", focus_root_chamfer, " mm) ≥ focus_tab_w/2 (",
+        focus_tab_w / 2, " mm) — root gussets would overlap at tab centre."));
+
+assert(focus_tab_l > 0,
+    "focus_tab_l must be > 0 mm.");
+
+assert(focus_tab_angle >= 0 && focus_tab_angle < 360,
+    str("focus_tab_angle (", focus_tab_angle, "°) out of range — must be in [0, 360)."));
+
+assert(nut_bridge_t >= 0.4,
+    str("nut_bridge_t (", nut_bridge_t, " mm) too thin — minimum 0.4 mm (≈ 2 layers at 0.2 mm) for reliable bridging."));
 
 // ============================================================
 //  MODULES — RIGID RING
@@ -256,15 +274,16 @@ module ring_body() {
             rotate_extrude()
                 polygon([
                     [ring_od / 2 - ring_chamfer, sz *  lens_grip_w / 2           ],
-                    [ring_od / 2 + 0.01,         sz *  lens_grip_w / 2           ],
-                    [ring_od / 2 + 0.01,         sz * (lens_grip_w / 2 - ring_chamfer)]
+                    [ring_od / 2 + eps,         sz *  lens_grip_w / 2           ],
+                    [ring_od / 2 + eps,         sz * (lens_grip_w / 2 - ring_chamfer)]
                 ]);
     }
 }
 
 // One clamping flange tab extending in +X from the ring OD.
-// bolt_holes=true → through-hole; false → through-hole + hex nut trap.
-module flange_tab(bolt_holes = true) {
+// use_counterbore=true → bolt through-hole + counterbore (top half);
+// use_counterbore=false → bolt through-hole + hex nut trap (bottom half).
+module flange_tab(use_counterbore = true) {
     tab_x   = ring_od / 2;
     tab_ext = flange_t;
 
@@ -277,11 +296,11 @@ module flange_tab(bolt_holes = true) {
                 // Bolt clearance hole through full tab thickness
                 rotate([0, 90, 0])
                     cylinder(d = bolt_d, h = tab_ext + 1, center = true);
-                if (bolt_holes) {
+                if (use_counterbore) {
                     // Counterbore from outer face — sinks M4 socket head flush
                     translate([tab_ext / 2 - cbore_depth / 2, 0, 0])
                         rotate([0, 90, 0])
-                            cylinder(d = cbore_d, h = cbore_depth + 0.01,
+                            cylinder(d = cbore_d, h = cbore_depth + eps,
                                      center = true);
                 } else {
                     // Nut trap recessed from the outer face
@@ -356,9 +375,9 @@ module half_ring(side = 1) {
             intersection() {
                 union() {
                     ring_body();
-                    flange_tab(bolt_holes = (side == 1));           // +X side
+                    flange_tab(use_counterbore = (side == 1));           // +X side
                     rotate([0, 0, 180])
-                        flange_tab(bolt_holes = (side == 1));       // -X side
+                        flange_tab(use_counterbore = (side == 1));       // -X side
                 }
                 translate([0, side * clip / 4, 0])
                     cube([clip, clip / 2 - gap / 2, lens_grip_w + 1],
@@ -393,7 +412,7 @@ module half_ring(side = 1) {
         //   side=-1 → rotate([  90,0,0]) → extrudes in -Y (into bottom half)
         translate([rigid_id / 2 + wall_t / 2, 0, 0])
             rotate([-side * 90, 0, 0])
-                linear_extrude(label_depth + 0.01)
+                linear_extrude(label_depth + eps)
                     text(side == 1 ? "T" : "B",
                          size   = label_size,
                          halign = "center",
@@ -450,14 +469,15 @@ module focus_ring_body() {
             rotate_extrude()
                 polygon([
                     [focus_ring_od / 2 - ring_chamfer, sz *  focus_grip_w / 2           ],
-                    [focus_ring_od / 2 + 0.01,         sz *  focus_grip_w / 2           ],
-                    [focus_ring_od / 2 + 0.01,         sz * (focus_grip_w / 2 - ring_chamfer)]
+                    [focus_ring_od / 2 + eps,         sz *  focus_grip_w / 2           ],
+                    [focus_ring_od / 2 + eps,         sz * (focus_grip_w / 2 - ring_chamfer)]
                 ]);
     }
 }
 
 // Single-bolt flange tab (bolt centred at Z=0, one per side).
-module focus_flange_tab(bolt_holes = true) {
+// use_counterbore=true → counterbore (top half); false → nut trap (bottom half).
+module focus_flange_tab(use_counterbore = true) {
     tab_x   = focus_ring_od / 2;
     tab_ext = focus_flange_t;
     difference() {
@@ -466,10 +486,10 @@ module focus_flange_tab(bolt_holes = true) {
         translate([tab_x + tab_ext / 2, 0, 0]) {
             rotate([0, 90, 0])
                 cylinder(d = bolt_d, h = tab_ext + 1, center = true);
-            if (bolt_holes) {
+            if (use_counterbore) {
                 translate([tab_ext / 2 - cbore_depth / 2, 0, 0])
                     rotate([0, 90, 0])
-                        cylinder(d = cbore_d, h = cbore_depth + 0.01, center = true);
+                        cylinder(d = cbore_d, h = cbore_depth + eps, center = true);
             } else {
                 translate([-tab_ext / 2 + nut_bridge_t + nut_trap_depth / 2, 0, 0])
                     rotate([0, 90, 0])
@@ -503,10 +523,10 @@ module focus_pull_tab() {
         // from each edge so bumps never overhang the tab boundary.
         for (bx = [-focus_tab_w/2 + focus_grip_bump_sp
                    : focus_grip_bump_sp
-                   : focus_tab_w/2 - focus_grip_bump_sp + 0.01])
+                   : focus_tab_w/2 - focus_grip_bump_sp + eps])
             for (by = [tab_base_y + focus_grip_bump_sp
                        : focus_grip_bump_sp
-                       : tab_base_y + focus_tab_l - focus_grip_bump_sp + 0.01])
+                       : tab_base_y + focus_tab_l - focus_grip_bump_sp + eps])
                 for (sz = [-1, 1])
                     translate([bx, by, sz * (focus_grip_w / 2 + focus_grip_bump_h / 2)])
                         cylinder(d = focus_grip_bump_d, h = focus_grip_bump_h,
@@ -523,16 +543,17 @@ module half_focus_ring(side = 1) {
             intersection() {
                 union() {
                     focus_ring_body();
-                    focus_flange_tab(bolt_holes = (side == 1));
-                    rotate([0, 0, 180]) focus_flange_tab(bolt_holes = (side == 1));
+                    focus_flange_tab(use_counterbore = (side == 1));
+                    rotate([0, 0, 180]) focus_flange_tab(use_counterbore = (side == 1));
                 }
                 translate([0, side * clip / 4, 0])
                     cube([clip, clip / 2 - gap / 2, focus_grip_w + 1], center = true);
             }
             // Tab belongs to the half whose Y-sign matches the tab direction.
-            // sin(focus_tab_angle) >= 0 → tab is in +Y half (side=1); < 0 → -Y half.
+            // sin() is unreliable at 0° and 180° due to floating-point (returns ~1e-16
+            // instead of exactly 0), so use a small epsilon threshold.
             // rotate(...-90) because focus_pull_tab() points in +Y (= 90° from +X).
-            if (side == (sin(focus_tab_angle) >= 0 ? 1 : -1))
+            if (side == (sin(focus_tab_angle) > 1e-9 ? 1 : -1))
                 rotate([0, 0, focus_tab_angle - 90])
                     focus_pull_tab();
             if (side == 1)
@@ -546,6 +567,16 @@ module half_focus_ring(side = 1) {
                 translate([sx * tab_cx, 0, 0])
                     rotate([90, 0, 0])
                         cylinder(d = align_socket_d, h = align_socket_l, $fn = 24);
+
+        // Part label engraved into the flat print face on the +X ring wall.
+        translate([focus_rigid_id / 2 + focus_wall_t / 2, 0, 0])
+            rotate([-side * 90, 0, 0])
+                linear_extrude(label_depth + eps)
+                    text(side == 1 ? "T" : "B",
+                         size   = label_size,
+                         halign = "center",
+                         valign = "center",
+                         font   = "Liberation Sans:style=Bold");
     }
 }
 
